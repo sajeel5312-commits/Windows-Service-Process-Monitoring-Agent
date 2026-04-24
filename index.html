@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SOC Dashboard</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: #1e293b;
+            padding: 15px;
+            border-radius: 10px;
+            flex: 1;
+            text-align: center;
+        }
+
+        .HIGH { color: #ff4d4d; }
+        .LOW { color: #4ade80; }
+
+        input, select {
+            padding: 8px;
+            margin-right: 10px;
+            border-radius: 5px;
+            border: none;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #1e293b;
+        }
+
+        th, td {
+            padding: 10px;
+            border-bottom: 1px solid #334155;
+        }
+
+        th {
+            background: #020617;
+        }
+
+        tr:hover {
+            background: #334155;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>SOC Dashboard</h1>
+
+    <!-- Search + Filter -->
+    <input type="text" id="search" placeholder="Search message..." oninput="applyFilters()">
+
+    <select id="filter" onchange="applyFilters()">
+        <option value="">All</option>
+        <option value="HIGH">High</option>
+        <option value="LOW">Low</option>
+    </select>
+
+    <!-- Stats -->
+    <div class="stats">
+        <div class="card">
+            <h2 id="total">0</h2>
+            <p>Total Alerts</p>
+        </div>
+
+        <div class="card">
+            <h2 id="high" class="HIGH">0</h2>
+            <p>High Risk</p>
+        </div>
+
+        <div class="card">
+            <h2 id="low" class="LOW">0</h2>
+            <p>Low Risk</p>
+        </div>
+    </div>
+
+    <!-- Table -->
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Message</th>
+                <th>Risk</th>
+            </tr>
+        </thead>
+        <tbody id="alerts"></tbody>
+    </table>
+
+    <!-- SCRIPT (IMPORTANT) -->
+    <script>
+        let allAlerts = [];
+
+        async function applyFilters() {
+            const risk = document.getElementById("filter").value;
+            const query = document.getElementById("search").value;
+
+            let url = `/api/alerts?`;
+
+            if (risk) url += `risk=${risk}&`;
+            if (query) url += `query=${query}`;
+
+            const res = await fetch(url);
+            const data = await res.json();
+
+            allAlerts = data;
+
+            updateStats();
+            renderTable(allAlerts);
+        }
+
+        function updateStats() {
+            document.getElementById("total").innerText = allAlerts.length;
+            document.getElementById("high").innerText =
+                allAlerts.filter(a => a.risk === "HIGH").length;
+            document.getElementById("low").innerText =
+                allAlerts.filter(a => a.risk === "LOW").length;
+        }
+
+        function renderTable(data) {
+            const table = document.getElementById("alerts");
+            table.innerHTML = "";
+
+            if (data.length === 0) {
+                table.innerHTML = `<tr><td colspan="4">No results</td></tr>`;
+                return;
+            }
+
+            data.forEach(a => {
+                table.innerHTML += `
+                <tr>
+                    <td>${a.timestamp}</td>
+                    <td>${a.type}</td>
+                    <td>${a.message}</td>
+                    <td class="${a.risk}">${a.risk}</td>
+                </tr>`;
+            });
+        }
+
+        // auto refresh
+        setInterval(applyFilters, 3000);
+
+        // first load
+        applyFilters();
+    </script>
+
+</body>
+</html>
