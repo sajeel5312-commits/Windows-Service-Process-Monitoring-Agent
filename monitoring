@@ -1,163 +1,84 @@
 import psutil
 import wmi
 import time
-import json
 import datetime
+import requests
 
-# -------- CONFIG -------- #
-SUSPICIOUS_PAIRS = {
-    ("winword.exe", "powershell.exe"),
-    ("excel.exe", "cmd.exe"),
-    ("outlook.exe", "powershell.exe"),
-    ("explorer.exe", "powershell.exe")
-}
+# Track seen processes
+SEEN_PIDS = set()
 
-WHITELIST = {
-    "explorer.exe", "chrome.exe", "python.exe",
-    "svchost.exe", "services.exe", "lsass.exe",
-    "code.exe", "openconsole.exe"
-}
+# -------- RISK RULES -------- #
+SUSPICIOUS_NAMES = ["powershell.exe", "cmd.exe"]
+SAFE_NAMES = ["chrome.exe", "msedge.exe", "explorer.exe", "code.exe"]
 
-# Trusted apps that can run from temp/appdata without triggering alerts
-TRUSTED_TEMP_APPS = {
-    "chrome.exe", "firefox.exe", "python.exe", "pip.exe",
-    "code.exe", "node.exe", "git.exe", "msiexec.exe"
-}
-
-LOG_FILE = "alerts.json"
-
-# -------- RISK SCORING -------- #
-def calculate_risk(alert_type):
-    if alert_type == "parent_child":
-        return "HIGH"
-    elif alert_type == "service":
-        return "MEDIUM"
-    elif alert_type == "process":
-        return "LOW"
-    return "UNKNOWN"
-
-# -------- JSON LOGGING -------- #
-def log_json(alert):
+# -------- SEND ALERT -------- #
+def send_alert(alert):
     try:
-        with open(LOG_FILE, "r") as f:
-            data = json.load(f)
-    except:
-        data = []
+        requests.post("http://127.0.0.1:5000/api/logs", json=alert)
+    except Exception as e:
+        print("Error sending alert:", e)
 
-    data.append(alert)
-
-    with open(LOG_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-# -------- PROCESS COLLECTION -------- #
+# -------- GET PROCESSES -------- #
 def get_processes():
     processes = {}
     for p in psutil.process_iter(['pid', 'ppid', 'name', 'exe']):
         try:
             processes[p.info['pid']] = p.info
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except:
             continue
     return processes
 
-# -------- DETECTION: PARENT-CHILD -------- #
-def detect_parent_child(processes):
+# -------- DETECT ALL APPS -------- #
+def detect_all_processes(processes):
     alerts = []
 
     for pid, info in processes.items():
-        parent = processes.get(info['ppid'])
-
-        if parent:
-            pair = (parent['name'].lower(), info['name'].lower())
-
-            if pair in SUSPICIOUS_PAIRS:
-                alerts.append({
-                    "type": "parent_child",
-                    "message": f"{parent['name']} -> {info['name']}",
-                    "risk": calculate_risk("parent_child")
-                })
-
-    return alerts
-
-# -------- DETECTION: UNKNOWN PROCESS -------- #
-def detect_suspicious_process(processes):
-    alerts = []
-
-    for pid, info in processes.items():
-        name = info['name']
-        path = info.get('exe')
-        name_lower = name.lower() if name else ""
-
-        # Skip whitelisted processes
-        if name_lower in {w.lower() for w in WHITELIST}:
+        if pid in SEEN_PIDS:
             continue
 
-        # Check if running from suspicious paths
-        if path and ("temp" in path.lower() or "appdata" in path.lower()):
-            # Allow trusted apps to run from temp/appdata
-            if name_lower in {w.lower() for w in TRUSTED_TEMP_APPS}:
-                continue
+        SEEN_PIDS.add(pid)
 
-            # Only flag if also an unknown process
-            alerts.append({
-                "type": "process",
-                "message": f"{name} from {path}",
-                "risk": calculate_risk("process")
-            })
+        name = (info['name'] or "").lower()
+        path = (info.get('exe') or "").lower()
 
-    return alerts
+        risk = "LOW"
 
-# -------- DETECTION: SERVICES -------- #
-def detect_services():
-    alerts = []
-    c = wmi.WMI()
+        # HIGH risk
+        if any(x in name for x in SUSPICIOUS_NAMES):
+            risk = "HIGH"
 
-    for service in c.Win32_Service():
-        path = str(service.PathName)
+        # MEDIUM risk
+        elif "temp" in path or "appdata" in path:
+            risk = "MEDIUM"
 
-        if "temp" in path.lower() or "appdata" in path.lower():
-            alerts.append({
-                "type": "service",
-                "message": f"{service.Name} -> {path}",
-                "risk": calculate_risk("service")
-            })
+        # LOW risk (default)
+        elif name in SAFE_NAMES:
+            risk = "LOW"
+
+        alerts.append({
+            "type": "process",
+            "message": name,
+            "risk": risk,
+            "timestamp": str(datetime.datetime.now())
+        })
 
     return alerts
 
-# -------- DASHBOARD -------- #
-def print_dashboard(alerts):
-    print("\n===== SECURITY DASHBOARD =====")
-
-    if not alerts:
-        print("No suspicious activity detected.")
-
-    for alert in alerts:
-        print(f"[{alert['risk']}] {alert['type']} -> {alert['message']}")
-
-# -------- MAIN MONITOR FUNCTION -------- #
+# -------- MAIN LOOP -------- #
 def monitor():
-    print("Advanced Monitoring Started...\n")
+    print("Monitoring started...\n")
 
     while True:
         processes = get_processes()
 
-        alerts = []
-        alerts += detect_parent_child(processes)
-        alerts += detect_suspicious_process(processes)
-        alerts += detect_services()
-
-        timestamp = str(datetime.datetime.now())
+        alerts = detect_all_processes(processes)
 
         for alert in alerts:
-            alert["timestamp"] = timestamp
-            log_json(alert)
-
-        print_dashboard(alerts)
+            send_alert(alert)
+            print(f"[{alert['risk']}] {alert['message']}")
 
         time.sleep(5)
 
-# -------- ENTRY POINT -------- #
-def main():
-    monitor()
-
+# -------- RUN -------- #
 if __name__ == "__main__":
-    main()
+    monitor()
